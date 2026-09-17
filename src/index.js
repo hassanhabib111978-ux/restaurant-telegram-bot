@@ -67,6 +67,8 @@ async function showCart(ctx) {
 
 bot.start(async ctx => {
   await upsertCustomer(ctx.from);
+  // Remove any legacy Reply Keyboard that may still be persisted in Telegram chats.
+  await ctx.reply('تم تحديث واجهة القائمة. 👌', Markup.removeKeyboard());
   await ctx.reply(`أهلًا بك في ${config.restaurantName} 👋\nاختر ما تريد من القائمة.`, mainMenu());
 });
 bot.command('menu', showCategories);
