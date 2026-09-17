@@ -9,26 +9,33 @@ bot.use(session({ defaultSession: () => ({ cart: [], checkout: null }) }));
 
 const money = value => `${Number(value).toLocaleString('ar-AE')} ${config.currency}`;
 
+// Main navigation stays inside the bot message, above Telegram's text input.
 function mainMenu() {
-  return Markup.keyboard([
-    ['🍽️ المنيو', '🛒 السلة'],
-    ['📦 طلباتي', '📍 بيانات التوصيل'],
-    ['ℹ️ المساعدة']
-  ]).resize();
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('🍽️ المنيو', 'menu:show'), Markup.button.callback('🛒 السلة', 'cart:show')],
+    [Markup.button.callback('📦 طلباتي', 'orders:show'), Markup.button.callback('📍 بيانات التوصيل', 'delivery:show')],
+    [Markup.button.callback('ℹ️ المساعدة', 'help:show')]
+  ]);
 }
 
 async function showCategories(ctx) {
   const categories = await getCategories();
-  if (!categories.length) return ctx.reply('المنيو قيد التجهيز حاليًا.');
-  return ctx.reply('اختر القسم:', Markup.inlineKeyboard(categories.map(c => [Markup.button.callback(c.name, `cat:${c.id}`)])));
+  if (!categories.length) return ctx.reply('المنيو قيد التجهيز حاليًا.', mainMenu());
+  return ctx.reply('اختر القسم:', Markup.inlineKeyboard([
+    ...categories.map(c => [Markup.button.callback(c.name, `cat:${c.id}`)]),
+    [Markup.button.callback('🏠 القائمة الرئيسية', 'menu:home')]
+  ]));
 }
 
 async function showProducts(ctx, categoryId) {
   const products = await getProducts(categoryId);
-  if (!products.length) return ctx.reply('لا توجد منتجات متاحة في هذا القسم حاليًا.');
+  if (!products.length) return ctx.reply('لا توجد منتجات متاحة في هذا القسم حاليًا.', mainMenu());
   for (const p of products) {
     const caption = `<b>${p.name}</b>\n${p.description || ''}\nالسعر: <b>${money(p.price)}</b>`;
-    const keyboard = Markup.inlineKeyboard([[Markup.button.callback('➕ أضف للسلة', `add:${p.id}`)]]);
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('➕ أضف للسلة', `add:${p.id}`)],
+      [Markup.button.callback('🍽️ الأقسام', 'menu:show'), Markup.button.callback('🛒 السلة', 'cart:show')]
+    ]);
     if (p.image_url) await ctx.replyWithPhoto(p.image_url, { caption, parse_mode: 'HTML', ...keyboard });
     else await ctx.reply(caption, { parse_mode: 'HTML', ...keyboard });
   }
@@ -47,12 +54,13 @@ function cartText(cart) {
 
 async function showCart(ctx) {
   const cart = ctx.session.cart || [];
-  if (!cart.length) return ctx.reply(cartText(cart), mainMenu());
+  if (!cart.length) return ctx.reply(cartText(cart), { parse_mode: 'HTML', ...mainMenu() });
   return ctx.reply(cartText(cart), {
     parse_mode: 'HTML',
     ...Markup.inlineKeyboard([
       [Markup.button.callback('🧹 تفريغ السلة', 'cart:clear')],
-      [Markup.button.callback('✅ متابعة الطلب', 'checkout:start')]
+      [Markup.button.callback('✅ متابعة الطلب', 'checkout:start')],
+      [Markup.button.callback('🍽️ متابعة التسوق', 'menu:show')]
     ])
   });
 }
@@ -62,9 +70,39 @@ bot.start(async ctx => {
   await ctx.reply(`أهلًا بك في ${config.restaurantName} 👋\nاختر ما تريد من القائمة.`, mainMenu());
 });
 bot.command('menu', showCategories);
-bot.hears('🍽️ المنيو', showCategories);
+
+bot.action('menu:home', async ctx => {
+  await ctx.answerCbQuery();
+  return ctx.reply(`أهلًا بك في ${config.restaurantName} 👋\nاختر ما تريد من القائمة.`, mainMenu());
+});
+bot.action('menu:show', async ctx => {
+  await ctx.answerCbQuery();
+  return showCategories(ctx);
+});
+bot.action('cart:show', async ctx => {
+  await ctx.answerCbQuery();
+  return showCart(ctx);
+});
+bot.action('orders:show', async ctx => {
+  await ctx.answerCbQuery();
+  return ctx.reply('📦 قسم طلباتي قيد التجهيز، وسنعرض هنا الطلبات السابقة وحالة الطلب الحالي.', mainMenu());
+});
+bot.action('delivery:show', async ctx => {
+  await ctx.answerCbQuery();
+  return ctx.reply('📍 بيانات التوصيل تُطلب أثناء إتمام الطلب. يمكنك إدخال عنوانك في خطوة التوصيل.', mainMenu());
+});
+bot.action('help:show', async ctx => {
+  await ctx.answerCbQuery();
+  return ctx.reply('ℹ️ اختر المنيو لإضافة المنتجات، ثم السلة لتأكيد الطلب.', mainMenu());
+});
+
+async function showCategoriesForText(ctx) {
+  return showCategories(ctx);
+}
+
+bot.hears('🍽️ المنيو', showCategoriesForText);
 bot.hears('🛒 السلة', showCart);
-bot.hears('ℹ️ المساعدة', ctx => ctx.reply('اختر المنيو لإضافة المنتجات، ثم السلة لتأكيد الطلب.'));
+bot.hears('ℹ️ المساعدة', ctx => ctx.reply('اختر المنيو لإضافة المنتجات، ثم السلة لتأكيد الطلب.', mainMenu()));
 
 bot.action(/^cat:(.+)$/, async ctx => {
   await ctx.answerCbQuery();
@@ -74,7 +112,7 @@ bot.action(/^cat:(.+)$/, async ctx => {
 bot.action(/^add:(.+)$/, async ctx => {
   await ctx.answerCbQuery('تمت الإضافة إلى السلة');
   const product = await import('./db.js').then(({ getProduct }) => getProduct(ctx.match[1]));
-  if (!product) return ctx.reply('تعذر العثور على المنتج.');
+  if (!product) return ctx.reply('تعذر العثور على المنتج.', mainMenu());
   const cart = ctx.session.cart || (ctx.session.cart = []);
   const existing = cart.find(i => String(i.product.id) === String(product.id));
   if (existing) existing.quantity += 1;
@@ -85,16 +123,17 @@ bot.action(/^add:(.+)$/, async ctx => {
 bot.action('cart:clear', async ctx => {
   ctx.session.cart = [];
   await ctx.answerCbQuery('تم تفريغ السلة');
-  return ctx.editMessageText('🛒 تم تفريغ السلة.');
+  return ctx.editMessageText('🛒 تم تفريغ السلة.', mainMenu());
 });
 
 bot.action('checkout:start', async ctx => {
   await ctx.answerCbQuery();
-  if (!ctx.session.cart?.length) return ctx.reply('السلة فارغة.');
+  if (!ctx.session.cart?.length) return ctx.reply('السلة فارغة.', mainMenu());
   ctx.session.checkout = { step: 'delivery_type' };
   return ctx.reply('كيف تريد استلام الطلب؟', Markup.inlineKeyboard([
     [Markup.button.callback('🚚 توصيل', 'checkout:delivery')],
-    [Markup.button.callback('🏪 استلام من المطعم', 'checkout:pickup')]
+    [Markup.button.callback('🏪 استلام من المطعم', 'checkout:pickup')],
+    [Markup.button.callback('🛒 العودة للسلة', 'cart:show')]
   ]));
 });
 
@@ -135,7 +174,7 @@ bot.on('text', async ctx => {
 async function finishCheckout(ctx, paymentMethod) {
   await ctx.answerCbQuery();
   const cart = ctx.session.cart || [];
-  if (!cart.length) return ctx.reply('السلة فارغة.');
+  if (!cart.length) return ctx.reply('السلة فارغة.', mainMenu());
   const customer = await upsertCustomer(ctx.from);
   const subtotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
   const deliveryFee = ctx.session.checkout?.deliveryType === 'delivery' ? config.defaultDeliveryFee : 0;
