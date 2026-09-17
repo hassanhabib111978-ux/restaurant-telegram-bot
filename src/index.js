@@ -1,3 +1,4 @@
+import http from 'node:http';
 import { Telegraf, Markup, session } from 'telegraf';
 import { config, validateConfig } from './config.js';
 import { getCategories, getProducts, upsertCustomer, createOrder } from './db.js';
@@ -6,7 +7,7 @@ validateConfig();
 const bot = new Telegraf(config.botToken);
 bot.use(session({ defaultSession: () => ({ cart: [], checkout: null }) }));
 
-const money = value => `${Number(value).toLocaleString('ar-SY')} ${config.currency}`;
+const money = value => `${Number(value).toLocaleString('ar-AE')} ${config.currency}`;
 
 function mainMenu() {
   return Markup.keyboard([
@@ -72,8 +73,7 @@ bot.action(/^cat:(.+)$/, async ctx => {
 
 bot.action(/^add:(.+)$/, async ctx => {
   await ctx.answerCbQuery('تمت الإضافة إلى السلة');
-  const products = await getProducts();
-  const product = products.find(p => String(p.id) === String(ctx.match[1]));
+  const product = await import('./db.js').then(({ getProduct }) => getProduct(ctx.match[1]));
   if (!product) return ctx.reply('تعذر العثور على المنتج.');
   const cart = ctx.session.cart || (ctx.session.cart = []);
   const existing = cart.find(i => String(i.product.id) === String(product.id));
@@ -138,7 +138,7 @@ async function finishCheckout(ctx, paymentMethod) {
   if (!cart.length) return ctx.reply('السلة فارغة.');
   const customer = await upsertCustomer(ctx.from);
   const subtotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
-  const deliveryFee = ctx.session.checkout?.deliveryType === 'delivery' ? config.deliveryFee : 0;
+  const deliveryFee = ctx.session.checkout?.deliveryType === 'delivery' ? config.defaultDeliveryFee : 0;
   const order = await createOrder({
     customerId: customer.id,
     items: cart,
@@ -146,6 +146,7 @@ async function finishCheckout(ctx, paymentMethod) {
     address: ctx.session.checkout?.address,
     paymentMethod,
     subtotal,
+    tax: 0,
     deliveryFee,
     total: subtotal + deliveryFee
   });
@@ -159,11 +160,19 @@ bot.catch((err, ctx) => {
   ctx.reply('حدث خطأ غير متوقع. حاول مرة أخرى بعد قليل.').catch(() => {});
 });
 
+// Render Web Services must have an HTTP listener. Telegram can still use polling.
+const port = Number(process.env.PORT || config.port || 10000);
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+  res.end('Restaurant bot is running.');
+});
+server.listen(port, '0.0.0.0', () => console.log(`HTTP health server listening on ${port}`));
+
 if (config.webhookDomain) {
   bot.launch({ webhook: { domain: config.webhookDomain, port: config.port, path: config.webhookPath, secretToken: config.webhookSecret || undefined } });
 } else {
   bot.launch();
 }
 
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+process.once('SIGINT', () => { bot.stop('SIGINT'); server.close(); });
+process.once('SIGTERM', () => { bot.stop('SIGTERM'); server.close(); });
