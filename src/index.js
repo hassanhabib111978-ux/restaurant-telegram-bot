@@ -130,26 +130,10 @@ async function showCart(ctx) {
 
 bot.start(async ctx => {
   await upsertCustomer(ctx.from);
-
-  // إزالة أي Reply Keyboard قديمة بدون إرسال رسالة تشخيصية.
-  // نرسل رسالة الترحيب نفسها مع أمر إزالة لوحة المفاتيح القديمة،
-  // ثم نضع الـ Inline Keyboard على الرسالة نفسها.
-  const welcome = await ctx.reply(
+  return ctx.reply(
     `أهلًا بك في ${config.restaurantName} 👋\nاختر ما تريد من القائمة.`,
-    Markup.removeKeyboard()
+    mainMenu()
   );
-
-  try {
-    await ctx.telegram.editMessageReplyMarkup(
-      ctx.chat.id,
-      welcome.message_id,
-      undefined,
-      mainMenu().reply_markup
-    );
-  } catch (err) {
-    console.error('MENU_MARKUP_ERROR', err);
-    await ctx.reply('اختر ما تريد:', mainMenu());
-  }
 });
 
 bot.command('menu', showCategories);
