@@ -12,8 +12,8 @@ const money = value => `${Number(value).toLocaleString('ar-AE')} ${config.curren
 function mainMenu() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback('🍽️ المنيو', 'menu:show'),
-      Markup.button.callback('🛒 السلة', 'cart:show')
+      Markup.button.callback('🍽️ المنيو والمنتجات', 'menu:show'),
+      Markup.button.callback('🛒 السلة والطلب', 'cart:show')
     ],
     [
       Markup.button.callback('📦 طلباتي', 'orders:show'),
@@ -36,18 +36,32 @@ function backHome() {
 
 async function showCategories(ctx) {
   const categories = await getCategories();
-  if (!categories.length) return ctx.reply('المنيو قيد التجهيز حاليًا.', mainMenu());
 
-  const rows = [];
-  for (let i = 0; i < categories.length; i += 2) {
-    rows.push(categories.slice(i, i + 2).map(c => Markup.button.callback(c.name, `cat:${c.id}`)));
+  const keyboard = categories.length
+    ? (() => {
+        const rows = [];
+        for (let i = 0; i < categories.length; i += 2) {
+          rows.push(categories.slice(i, i + 2).map(c => Markup.button.callback(c.name, `cat:${c.id}`)));
+        }
+        rows.push([
+          Markup.button.callback('🏠 الرئيسية', 'menu:home'),
+          Markup.button.callback('🛒 السلة والطلب', 'cart:show')
+        ]);
+        return Markup.inlineKeyboard(rows);
+      })()
+    : mainMenu();
+
+  const text = categories.length ? '🍽️ اختر القسم:' : 'المنيو قيد التجهيز حاليًا.';
+
+  if (ctx.callbackQuery?.message) {
+    try {
+      return await ctx.editMessageText(text, keyboard);
+    } catch (err) {
+      return ctx.reply(text, keyboard);
+    }
   }
-  rows.push([
-    Markup.button.callback('🏠 الرئيسية', 'menu:home'),
-    Markup.button.callback('🛒 السلة', 'cart:show')
-  ]);
 
-  return ctx.reply('🍽️ اختر القسم:', Markup.inlineKeyboard(rows));
+  return ctx.reply(text, keyboard);
 }
 
 async function showProducts(ctx, categoryId) {
@@ -88,21 +102,30 @@ function cartText(cart) {
 
 async function showCart(ctx) {
   const cart = ctx.session.cart || [];
-  if (!cart.length) return ctx.reply(cartText(cart), { parse_mode: 'HTML', ...mainMenu() });
+  const keyboard = !cart.length
+    ? mainMenu()
+    : Markup.inlineKeyboard([
+        [
+          Markup.button.callback('🧹 تفريغ السلة', 'cart:clear'),
+          Markup.button.callback('✅ متابعة الطلب', 'checkout:start')
+        ],
+        [
+          Markup.button.callback('🍽️ متابعة التسوق', 'menu:show'),
+          Markup.button.callback('🏠 الرئيسية', 'menu:home')
+        ]
+      ]);
 
-  return ctx.reply(cartText(cart), {
-    parse_mode: 'HTML',
-    ...Markup.inlineKeyboard([
-      [
-        Markup.button.callback('🧹 تفريغ السلة', 'cart:clear'),
-        Markup.button.callback('✅ متابعة الطلب', 'checkout:start')
-      ],
-      [
-        Markup.button.callback('🍽️ متابعة التسوق', 'menu:show'),
-        Markup.button.callback('🏠 الرئيسية', 'menu:home')
-      ]
-    ])
-  });
+  const text = cartText(cart);
+
+  if (ctx.callbackQuery?.message) {
+    try {
+      return await ctx.editMessageText(text, { parse_mode: 'HTML', ...keyboard });
+    } catch (err) {
+      return ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
+    }
+  }
+
+  return ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
 }
 
 bot.start(async ctx => {
@@ -133,7 +156,12 @@ bot.command('menu', showCategories);
 
 bot.action('menu:home', async ctx => {
   await ctx.answerCbQuery();
-  return ctx.reply(`أهلًا بك في ${config.restaurantName} 👋\nاختر ما تريد من القائمة.`, mainMenu());
+  const text = `أهلًا بك في ${config.restaurantName} 👋\nاختر ما تريد من القائمة.`;
+  try {
+    return await ctx.editMessageText(text, mainMenu());
+  } catch (err) {
+    return ctx.reply(text, mainMenu());
+  }
 });
 
 bot.action('menu:show', async ctx => {
