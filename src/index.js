@@ -12,12 +12,12 @@ const money = value => `${Number(value).toLocaleString('ar-AE')} ${config.curren
 function mainMenu() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback('🍽️ المنيو والمنتجات', 'menu:show'),
-      Markup.button.callback('🛒 السلة والطلب', 'cart:show')
+      Markup.button.callback('  🍽️ المنيو والمنتجات  ', 'menu:show'),
+      Markup.button.callback('  🛒 السلة والطلب  ', 'cart:show')
     ],
     [
-      Markup.button.callback('📦 طلباتي', 'orders:show'),
-      Markup.button.callback('📍 التوصيل', 'delivery:show')
+      Markup.button.callback('  📦 طلباتي  ', 'orders:show'),
+      Markup.button.callback('  📍 التوصيل  ', 'delivery:show')
     ],
     [
       Markup.button.callback('ℹ️ المساعدة', 'help:show')
