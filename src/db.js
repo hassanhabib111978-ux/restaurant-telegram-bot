@@ -112,7 +112,7 @@ export async function createOrder({ customerId, items, deliveryType, address, la
     payment_method: paymentMethod,
     payment_status: paymentMethod === 'cash' ? 'pending' : 'pending',
     subtotal,
-    tax_amount: tax,
+    tax,
     delivery_fee: deliveryFee,
     total,
     currency: config.currency
