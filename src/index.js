@@ -77,13 +77,42 @@ function setProductQuantity(ctx, productId, quantity) {
   return quantities[productId];
 }
 
-function productKeyboard(productId, quantity) {
-  return Markup.inlineKeyboard([
+function getSelectedOptions(ctx, productId) {
+  const all = ctx.session.productOptions || (ctx.session.productOptions = {});
+  return all[productId] || [];
+}
+
+function toggleProductOption(ctx, productId, option) {
+  const all = ctx.session.productOptions || (ctx.session.productOptions = {});
+  const selected = new Set(all[productId] || []);
+  if (selected.has(option.id)) selected.delete(option.id);
+  else selected.add(option.id);
+  all[productId] = [...selected];
+  return all[productId];
+}
+
+function selectedOptionRows(options, selectedIds) {
+  return options.map(option => {
+    const selected = selectedIds.includes(option.id);
+    const delta = Number(option.price_delta || 0);
+    const price = delta > 0 ? ` + ${money(delta)}` : delta < 0 ? ` - ${money(Math.abs(delta))}` : '';
+    return [
+      Markup.button.callback(
+        `${selected ? '✅' : '➕'} ${option.name}${price}`,
+        `opt:${option.id}`
+      )
+    ];
+  });
+}
+
+function productKeyboard(productId, quantity, options = [], selectedIds = []) {
+  const rows = [
     [
       Markup.button.callback(' ➖ ', `qty:${productId}:-1`),
       Markup.button.callback(` الكمية: ${quantity} `, 'qty:none'),
       Markup.button.callback(' ➕ ', `qty:${productId}:1`)
     ],
+    ...selectedOptionRows(options, selectedIds),
     [
       Markup.button.callback('  🛒 أضف للسلة  ', `add:${productId}`),
       Markup.button.callback('  🛒 السلة  ', 'cart:show')
@@ -92,7 +121,23 @@ function productKeyboard(productId, quantity) {
       Markup.button.callback('  🍽️ الأقسام  ', 'menu:show'),
       Markup.button.callback('  🏠 الرئيسية  ', 'menu:home')
     ]
-  ]);
+  ];
+  return Markup.inlineKeyboard(rows);
+}
+
+function productUnitPrice(product, options = [], selectedIds = []) {
+  return Number(product.price) + options
+    .filter(option => selectedIds.includes(option.id))
+    .reduce((sum, option) => sum + Number(option.price_delta || 0), 0);
+}
+
+function productCaption(product, options = [], selectedIds = [], quantity = 1) {
+  const selected = options.filter(option => selectedIds.includes(option.id));
+  const unitPrice = productUnitPrice(product, options, selectedIds);
+  const optionText = selected.length
+    ? `\nالإضافات: ${selected.map(option => option.name).join('، ')}`
+    : '';
+  return `<b>${product.name}</b>\n${product.description || ''}${optionText}\nالسعر للوحدة: <b>${money(unitPrice)}</b>\nالكمية: <b>${quantity}</b>\nالإجمالي: <b>${money(unitPrice * quantity)}</b>`;
 }
 
 async function showProducts(ctx, categoryId) {
@@ -100,8 +145,11 @@ async function showProducts(ctx, categoryId) {
   if (!products.length) return ctx.reply('لا توجد منتجات متاحة في هذا القسم حاليًا.', backHome());
 
   for (const p of products) {
-    const caption = `<b>${p.name}</b>\n${p.description || ''}\nالسعر: <b>${money(p.price)}</b>`;
-    const keyboard = productKeyboard(p.id, getProductQuantity(ctx, p.id));
+    const options = await getProductOptions(p.id);
+    const selectedIds = getSelectedOptions(ctx, p.id);
+    const quantity = getProductQuantity(ctx, p.id);
+    const caption = productCaption(p, options, selectedIds, quantity);
+    const keyboard = productKeyboard(p.id, quantity, options, selectedIds);
 
     if (p.image_url) {
       await ctx.replyWithPhoto(p.image_url, { caption, parse_mode: 'HTML', ...keyboard });
@@ -111,30 +159,39 @@ async function showProducts(ctx, categoryId) {
   }
 }
 
-async function refreshProductQuantity(ctx, productId) {
+async function refreshProductMessage(ctx, productId) {
   const product = await getProduct(productId);
   if (!product || !ctx.callbackQuery?.message) return;
 
+  const options = await getProductOptions(productId);
+  const selectedIds = getSelectedOptions(ctx, productId);
   const quantity = getProductQuantity(ctx, productId);
-  const caption = `<b>${product.name}</b>\n${product.description || ''}\nالسعر: <b>${money(product.price)}</b>`;
+  const caption = productCaption(product, options, selectedIds, quantity);
+  const keyboard = productKeyboard(productId, quantity, options, selectedIds);
 
   try {
     if (ctx.callbackQuery.message.photo) {
-      return await ctx.editMessageCaption(caption, { parse_mode: 'HTML', ...productKeyboard(productId, quantity) });
+      return await ctx.editMessageCaption(caption, { parse_mode: 'HTML', ...keyboard });
     }
-    return await ctx.editMessageText(caption, { parse_mode: 'HTML', ...productKeyboard(productId, quantity) });
+    return await ctx.editMessageText(caption, { parse_mode: 'HTML', ...keyboard });
   } catch (err) {
     return;
   }
+}
+
+async function refreshProductQuantity(ctx, productId) {
+  return refreshProductMessage(ctx, productId);
 }
 
 function cartText(cart) {
   if (!cart.length) return '🛒 السلة فارغة.';
   let total = 0;
   const lines = cart.map((item, i) => {
-    const line = item.product.price * item.quantity;
+    const unitPrice = Number(item.product.price) + (item.options || []).reduce((sum, option) => sum + Number(option.price_delta || 0), 0);
+    const line = unitPrice * item.quantity;
     total += line;
-    return `${i + 1}. ${item.product.name} × ${item.quantity} = ${money(line)}`;
+    const optionText = (item.options || []).length ? `\n   ↳ ${item.options.map(option => option.name).join('، ')}` : '';
+    return `${i + 1}. ${item.product.name} × ${item.quantity}${optionText} = ${money(line)}`;
   });
   return `🛒 <b>السلة</b>\n\n${lines.join('\n')}\n\nالمجموع: <b>${money(total)}</b>`;
 }
@@ -229,6 +286,24 @@ bot.action('qty:none', async ctx => {
   return ctx.answerCbQuery('استخدم ➕ و ➖ لتحديد الكمية');
 });
 
+bot.action(/^opt:(.+)$/, async ctx => {
+  const optionId = ctx.match[1];
+  const { data: option, error } = await supabase
+    .from('product_options')
+    .select('*')
+    .eq('id', optionId)
+    .eq('restaurant_id', config.restaurantId)
+    .eq('active', true)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!option) return ctx.answerCbQuery('الإضافة غير متاحة حاليًا');
+
+  toggleProductOption(ctx, option.product_id, option);
+  await ctx.answerCbQuery('تم تحديث الإضافات');
+  return refreshProductMessage(ctx, option.product_id);
+});
+
 bot.action(/^add:(.+)$/, async ctx => {
   const product = await getProduct(ctx.match[1]);
   if (!product) {
@@ -237,12 +312,30 @@ bot.action(/^add:(.+)$/, async ctx => {
   }
 
   const quantity = getProductQuantity(ctx, product.id);
+  const options = await getProductOptions(product.id);
+  const selectedIds = getSelectedOptions(ctx, product.id);
+  const selectedOptions = options.filter(option => selectedIds.includes(option.id));
+  const unitPrice = productUnitPrice(product, options, selectedIds);
+  const lineTotal = unitPrice * quantity;
+
   const cart = ctx.session.cart || (ctx.session.cart = []);
-  const existing = cart.find(i => String(i.product.id) === String(product.id));
+  const optionKey = selectedOptions.map(option => option.id).sort().join(',');
+  const existing = cart.find(i =>
+    String(i.product.id) === String(product.id) &&
+    (i.options || []).map(option => option.id).sort().join(',') === optionKey
+  );
+
   if (existing) existing.quantity += quantity;
-  else cart.push({ product, quantity });
+  else cart.push({
+    product,
+    quantity,
+    options: selectedOptions,
+    lineTotal
+  });
 
   setProductQuantity(ctx, product.id, 1);
+  ctx.session.productOptions = ctx.session.productOptions || {};
+  ctx.session.productOptions[product.id] = [];
 
   await ctx.answerCbQuery(`تمت إضافة ${quantity} من المنتج إلى السلة`);
   return ctx.reply(`✅ تمت إضافة ${product.name} × ${quantity} إلى السلة.`, Markup.inlineKeyboard([
