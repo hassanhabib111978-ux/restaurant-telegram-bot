@@ -53,6 +53,18 @@ export async function getProductOptions(productId) {
   return data || [];
 }
 
+export async function getProductOption(optionId) {
+  const { data, error } = await supabase
+    .from('product_options')
+    .select('*')
+    .eq('restaurant_id', config.restaurantId)
+    .eq('id', optionId)
+    .eq('active', true)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
 export async function upsertCustomer(telegramUser, extra = {}) {
   const payload = {
     restaurant_id: config.restaurantId,
