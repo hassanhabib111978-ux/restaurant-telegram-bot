@@ -40,10 +40,10 @@ async function showCategories(ctx) {
   const keyboard = categories.length
     ? (() => {
         const rows = [];
-        for (const c of categories) {
-          rows.push([
-            Markup.button.callback(`🍽️ ${c.name}  •  فتح القسم`, `cat:${c.id}`)
-          ]);
+        for (let i = 0; i < categories.length; i += 2) {
+          rows.push(categories.slice(i, i + 2).map(c =>
+            Markup.button.callback(`  ${c.name}  `, `cat:${c.id}`)
+          ));
         }
         rows.push([
           Markup.button.callback('  🏠 الرئيسية  ', 'menu:home'),
