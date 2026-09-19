@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { Telegraf, Markup, session } from 'telegraf';
 import { config, validateConfig } from './config.js';
-import { getCategories, getProducts, getProduct, upsertCustomer, createOrder } from './db.js';
+import { getCategories, getProducts, getProduct, getProductOptions, getProductOption, upsertCustomer, createOrder } from './db.js';
 
 validateConfig();
 const bot = new Telegraf(config.botToken);
@@ -288,15 +288,7 @@ bot.action('qty:none', async ctx => {
 
 bot.action(/^opt:(.+)$/, async ctx => {
   const optionId = ctx.match[1];
-  const { data: option, error } = await supabase
-    .from('product_options')
-    .select('*')
-    .eq('id', optionId)
-    .eq('restaurant_id', config.restaurantId)
-    .eq('active', true)
-    .maybeSingle();
-
-  if (error) throw error;
+  const option = await getProductOption(optionId);
   if (!option) return ctx.answerCbQuery('الإضافة غير متاحة حاليًا');
 
   toggleProductOption(ctx, option.product_id, option);
