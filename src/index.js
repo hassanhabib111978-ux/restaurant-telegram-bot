@@ -5,7 +5,7 @@ import { getCategories, getProducts, getProduct, upsertCustomer, createOrder } f
 
 validateConfig();
 const bot = new Telegraf(config.botToken);
-bot.use(session({ defaultSession: () => ({ cart: [], checkout: null }) }));
+bot.use(session({ defaultSession: () => ({ cart: [], checkout: null, productQuantities: {} }) }));
 
 const money = value => `${Number(value).toLocaleString('ar-AE')} ${config.currency}`;
 
@@ -28,8 +28,8 @@ function mainMenu() {
 function backHome() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback('🏠 الرئيسية', 'menu:home'),
-      Markup.button.callback('🛒 السلة', 'cart:show')
+      Markup.button.callback('  🏠 الرئيسية  ', 'menu:home'),
+      Markup.button.callback('  🛒 السلة  ', 'cart:show')
     ]
   ]);
 }
@@ -41,7 +41,9 @@ async function showCategories(ctx) {
     ? (() => {
         const rows = [];
         for (let i = 0; i < categories.length; i += 2) {
-          rows.push(categories.slice(i, i + 2).map(c => Markup.button.callback(`  ${c.name}  `, `cat:${c.id}`)));
+          rows.push(categories.slice(i, i + 2).map(c =>
+            Markup.button.callback(`  ${c.name}  `, `cat:${c.id}`)
+          ));
         }
         rows.push([
           Markup.button.callback('  🏠 الرئيسية  ', 'menu:home'),
@@ -64,28 +66,65 @@ async function showCategories(ctx) {
   return ctx.reply(text, keyboard);
 }
 
+function getProductQuantity(ctx, productId) {
+  const quantities = ctx.session.productQuantities || (ctx.session.productQuantities = {});
+  return Math.max(1, Number(quantities[productId] || 1));
+}
+
+function setProductQuantity(ctx, productId, quantity) {
+  const quantities = ctx.session.productQuantities || (ctx.session.productQuantities = {});
+  quantities[productId] = Math.max(1, Math.min(99, Number(quantity) || 1));
+  return quantities[productId];
+}
+
+function productKeyboard(productId, quantity) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback(' ➖ ', `qty:${productId}:-1`),
+      Markup.button.callback(` الكمية: ${quantity} `, 'qty:none'),
+      Markup.button.callback(' ➕ ', `qty:${productId}:1`)
+    ],
+    [
+      Markup.button.callback('  🛒 أضف للسلة  ', `add:${productId}`),
+      Markup.button.callback('  🛒 السلة  ', 'cart:show')
+    ],
+    [
+      Markup.button.callback('  🍽️ الأقسام  ', 'menu:show'),
+      Markup.button.callback('  🏠 الرئيسية  ', 'menu:home')
+    ]
+  ]);
+}
+
 async function showProducts(ctx, categoryId) {
   const products = await getProducts(categoryId);
   if (!products.length) return ctx.reply('لا توجد منتجات متاحة في هذا القسم حاليًا.', backHome());
 
   for (const p of products) {
     const caption = `<b>${p.name}</b>\n${p.description || ''}\nالسعر: <b>${money(p.price)}</b>`;
-    const keyboard = Markup.inlineKeyboard([
-      [
-        Markup.button.callback('➕ أضف للسلة', `add:${p.id}`),
-        Markup.button.callback('🛒 السلة', 'cart:show')
-      ],
-      [
-        Markup.button.callback('🍽️ الأقسام', 'menu:show'),
-        Markup.button.callback('🏠 الرئيسية', 'menu:home')
-      ]
-    ]);
+    const keyboard = productKeyboard(p.id, getProductQuantity(ctx, p.id));
 
     if (p.image_url) {
       await ctx.replyWithPhoto(p.image_url, { caption, parse_mode: 'HTML', ...keyboard });
     } else {
       await ctx.reply(caption, { parse_mode: 'HTML', ...keyboard });
     }
+  }
+}
+
+async function refreshProductQuantity(ctx, productId) {
+  const product = await getProduct(productId);
+  if (!product || !ctx.callbackQuery?.message) return;
+
+  const quantity = getProductQuantity(ctx, productId);
+  const caption = `<b>${product.name}</b>\n${product.description || ''}\nالسعر: <b>${money(product.price)}</b>`;
+
+  try {
+    if (ctx.callbackQuery.message.photo) {
+      return await ctx.editMessageCaption(caption, { parse_mode: 'HTML', ...productKeyboard(productId, quantity) });
+    }
+    return await ctx.editMessageText(caption, { parse_mode: 'HTML', ...productKeyboard(productId, quantity) });
+  } catch (err) {
+    return;
   }
 }
 
@@ -106,12 +145,12 @@ async function showCart(ctx) {
     ? mainMenu()
     : Markup.inlineKeyboard([
         [
-          Markup.button.callback('🧹 تفريغ السلة', 'cart:clear'),
-          Markup.button.callback('✅ متابعة الطلب', 'checkout:start')
+          Markup.button.callback('  🧹 تفريغ السلة  ', 'cart:clear'),
+          Markup.button.callback('  ✅ متابعة الطلب  ', 'checkout:start')
         ],
         [
-          Markup.button.callback('🍽️ متابعة التسوق', 'menu:show'),
-          Markup.button.callback('🏠 الرئيسية', 'menu:home')
+          Markup.button.callback('  🍽️ متابعة التسوق  ', 'menu:show'),
+          Markup.button.callback('  🏠 الرئيسية  ', 'menu:home')
         ]
       ]);
 
@@ -178,6 +217,18 @@ bot.action(/^cat:(.+)$/, async ctx => {
   return showProducts(ctx, ctx.match[1]);
 });
 
+bot.action(/^qty:(.+):(-?1)$/, async ctx => {
+  const productId = ctx.match[1];
+  const delta = Number(ctx.match[2]);
+  const quantity = setProductQuantity(ctx, productId, getProductQuantity(ctx, productId) + delta);
+  await ctx.answerCbQuery(`الكمية: ${quantity}`);
+  return refreshProductQuantity(ctx, productId);
+});
+
+bot.action('qty:none', async ctx => {
+  return ctx.answerCbQuery('استخدم ➕ و ➖ لتحديد الكمية');
+});
+
 bot.action(/^add:(.+)$/, async ctx => {
   const product = await getProduct(ctx.match[1]);
   if (!product) {
@@ -185,16 +236,19 @@ bot.action(/^add:(.+)$/, async ctx => {
     return ctx.reply('تعذر العثور على المنتج.', backHome());
   }
 
+  const quantity = getProductQuantity(ctx, product.id);
   const cart = ctx.session.cart || (ctx.session.cart = []);
   const existing = cart.find(i => String(i.product.id) === String(product.id));
-  if (existing) existing.quantity += 1;
-  else cart.push({ product, quantity: 1 });
+  if (existing) existing.quantity += quantity;
+  else cart.push({ product, quantity });
 
-  await ctx.answerCbQuery('تمت الإضافة إلى السلة');
-  return ctx.reply(`✅ تمت إضافة ${product.name} إلى السلة.`, Markup.inlineKeyboard([
+  setProductQuantity(ctx, product.id, 1);
+
+  await ctx.answerCbQuery(`تمت إضافة ${quantity} من المنتج إلى السلة`);
+  return ctx.reply(`✅ تمت إضافة ${product.name} × ${quantity} إلى السلة.`, Markup.inlineKeyboard([
     [
-      Markup.button.callback('🛒 عرض السلة', 'cart:show'),
-      Markup.button.callback('🍽️ متابعة التسوق', 'menu:show')
+      Markup.button.callback('  🛒 عرض السلة  ', 'cart:show'),
+      Markup.button.callback('  🍽️ متابعة التسوق  ', 'menu:show')
     ]
   ]));
 });
