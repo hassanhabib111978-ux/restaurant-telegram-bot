@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { Telegraf, Markup, session } from 'telegraf';
 import { config, validateConfig } from './config.js';
-import { getCategories, getProducts, getProduct, getProductOptions, getProductOption, upsertCustomer, createOrder } from './db.js';
+import { getCategories, getProducts, getProduct, getProductOptions, getProductOption, upsertCustomer, getCustomer, listCustomerOrders, createOrder } from './db.js';
 
 validateConfig();
 const bot = new Telegraf(config.botToken);
@@ -256,7 +256,24 @@ bot.action('cart:show', async ctx => {
 
 bot.action('orders:show', async ctx => {
   await ctx.answerCbQuery();
-  return ctx.reply('📦 قسم طلباتي قيد التجهيز، وسنعرض هنا الطلبات السابقة وحالة الطلب الحالي.', backHome());
+  try {
+    const customer = await getCustomer(ctx.from);
+    if (!customer) return ctx.reply('📦 لا توجد طلبات سابقة حتى الآن.', backHome());
+    const orders = await listCustomerOrders(customer.id);
+    if (!orders.length) return ctx.reply('📦 لا توجد طلبات سابقة حتى الآن.', backHome());
+    const statusMap = {
+      pending: 'قيد المراجعة', confirmed: 'تم التأكيد', preparing: 'قيد التحضير',
+      ready: 'جاهز', out_for_delivery: 'خرج للتوصيل', delivered: 'تم التسليم',
+      cancelled: 'ملغى', rejected: 'مرفوض'
+    };
+    const text = orders.map(o =>
+      `#${o.id} — ${statusMap[o.status] || o.status}\n${money(o.total)} — ${o.delivery_type === 'delivery' ? 'توصيل' : 'استلام'}\nالدفع: ${o.payment_method === 'cash' ? 'عند الاستلام' : 'إلكتروني'}`
+    ).join('\n\n');
+    return ctx.reply(`📦 <b>طلباتي</b>\n\n${text}`, { parse_mode: 'HTML', ...backHome() });
+  } catch (err) {
+    console.error('ORDERS_ERROR', err);
+    return ctx.reply('تعذر تحميل الطلبات حاليًا. حاول مرة أخرى.', backHome());
+  }
 });
 
 bot.action('delivery:show', async ctx => {
@@ -365,9 +382,9 @@ bot.action('checkout:delivery', async ctx => {
 });
 
 bot.action('checkout:pickup', async ctx => {
-  ctx.session.checkout = { step: 'payment', deliveryType: 'pickup' };
+  ctx.session.checkout = { step: 'phone', deliveryType: 'pickup' };
   await ctx.answerCbQuery();
-  return ctx.reply('اختر طريقة الدفع:', Markup.inlineKeyboard([
+  return ctx.reply('أرسل رقم الهاتف للتواصل معك:', Markup.inlineKeyboard([[Markup.button.callback('🛒 العودة للسلة', 'cart:show')]]));
     [
       Markup.button.callback('💵 دفع عند الاستلام', 'pay:cash'),
       Markup.button.callback('💳 دفع إلكتروني', 'pay:online')
@@ -382,12 +399,32 @@ bot.action('pay:online', async ctx => {
   return ctx.reply('الدفع الإلكتروني جاهز للربط بمزود الدفع، لكن لن نفعل أي بوابة قبل تحديد المزود وواجهته رسميًا.');
 });
 
+bot.on('contact', async ctx => {
+  const checkout = ctx.session.checkout;
+  if (!checkout) return;
+  if (checkout.step === 'phone') {
+    checkout.phone = ctx.message.contact.phone_number;
+    checkout.step = 'payment';
+    return ctx.reply('اختر طريقة الدفع:', Markup.inlineKeyboard([
+      [Markup.button.callback('💵 دفع عند الاستلام', 'pay:cash'), Markup.button.callback('💳 دفع إلكتروني', 'pay:online')]
+    ]));
+  }
+});
+
 bot.on('text', async ctx => {
   const checkout = ctx.session.checkout;
   if (!checkout) return;
 
   if (checkout.step === 'address') {
     checkout.address = ctx.message.text;
+    checkout.step = 'phone';
+    return ctx.reply('📱 أرسل رقم الهاتف للتواصل معك:', Markup.inlineKeyboard([
+      [Markup.button.callback('🛒 العودة للسلة', 'cart:show')]
+    ]));
+  }
+
+  if (checkout.step === 'phone') {
+    checkout.phone = ctx.message.text.trim();
     checkout.step = 'payment';
     return ctx.reply('اختر طريقة الدفع:', Markup.inlineKeyboard([
       [
@@ -403,21 +440,34 @@ async function finishCheckout(ctx, paymentMethod) {
   const cart = ctx.session.cart || [];
   if (!cart.length) return ctx.reply('السلة فارغة.', mainMenu());
 
-  const customer = await upsertCustomer(ctx.from);
-  const subtotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
+  const customer = await upsertCustomer(ctx.from, {
+    phone: ctx.session.checkout?.phone,
+    address: ctx.session.checkout?.address,
+    latitude: ctx.session.checkout?.latitude,
+    longitude: ctx.session.checkout?.longitude
+  });
+  const subtotal = cart.reduce((sum, item) => sum + (Number(item.product.price) + (item.options || []).reduce((s, o) => s + Number(o.price_delta || 0), 0)) * item.quantity, 0);
   const deliveryFee = ctx.session.checkout?.deliveryType === 'delivery' ? config.defaultDeliveryFee : 0;
 
-  const order = await createOrder({
+  let order;
+  try {
+    order = await createOrder({
     customerId: customer.id,
     items: cart,
     deliveryType: ctx.session.checkout?.deliveryType || 'pickup',
     address: ctx.session.checkout?.address,
+    latitude: ctx.session.checkout?.latitude,
+    longitude: ctx.session.checkout?.longitude,
     paymentMethod,
     subtotal,
     tax: 0,
     deliveryFee,
     total: subtotal + deliveryFee
   });
+  } catch (err) {
+    console.error('CREATE_ORDER_ERROR', err);
+    return ctx.reply('تعذر تسجيل الطلب حاليًا. لم يتم حذف السلة، حاول مرة أخرى.', backHome());
+  }
 
   ctx.session.cart = [];
   ctx.session.checkout = null;
