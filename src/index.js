@@ -384,11 +384,8 @@ bot.action('checkout:delivery', async ctx => {
 bot.action('checkout:pickup', async ctx => {
   ctx.session.checkout = { step: 'phone', deliveryType: 'pickup' };
   await ctx.answerCbQuery();
-  return ctx.reply('أرسل رقم الهاتف للتواصل معك:', Markup.inlineKeyboard([[Markup.button.callback('🛒 العودة للسلة', 'cart:show')]]));
-    [
-      Markup.button.callback('💵 دفع عند الاستلام', 'pay:cash'),
-      Markup.button.callback('💳 دفع إلكتروني', 'pay:online')
-    ]
+  return ctx.reply('📱 أرسل رقم الهاتف للتواصل معك:', Markup.inlineKeyboard([
+    [Markup.button.callback('🛒 العودة للسلة', 'cart:show')]
   ]));
 });
 
