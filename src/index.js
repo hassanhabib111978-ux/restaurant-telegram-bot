@@ -569,20 +569,22 @@ bot.catch((err, ctx) => {
 
 const port = Number(process.env.PORT || config.port || 10000);
 const server = http.createServer((req, res) => {
+  if (config.webhookDomain && req.url?.split('?')[0] === config.webhookPath) {
+    const callback = bot.webhookCallback(config.webhookPath, {
+      secretToken: config.webhookSecret || undefined
+    });
+    return callback(req, res);
+  }
   res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
   res.end('Restaurant bot is running.');
 });
 server.listen(port, '0.0.0.0', () => console.log(`HTTP health server listening on ${port}`));
 
 if (config.webhookDomain) {
-  bot.launch({
-    webhook: {
-      domain: config.webhookDomain,
-      port: config.port,
-      path: config.webhookPath,
-      secretToken: config.webhookSecret || undefined
-    }
-  });
+  bot.telegram.setWebhook(`${config.webhookDomain}${config.webhookPath}`, {
+    secret_token: config.webhookSecret || undefined,
+    drop_pending_updates: true
+  }).then(() => console.log('Telegram webhook configured')).catch(err => console.error('WEBHOOK_SETUP_ERROR', err));
 } else {
   bot.launch();
 }
