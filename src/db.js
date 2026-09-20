@@ -53,6 +53,17 @@ export async function getProductOptions(productId) {
   return data || [];
 }
 
+export async function getDeliveryZones() {
+  const { data, error } = await supabase
+    .from('delivery_zones')
+    .select('*')
+    .eq('restaurant_id', config.restaurantId)
+    .eq('active', true)
+    .order('name');
+  if (error) throw error;
+  return data || [];
+}
+
 export async function getProductOption(optionId) {
   const { data, error } = await supabase
     .from('product_options')
@@ -105,6 +116,41 @@ export async function getCustomer(telegramUser) {
     .eq('restaurant_id', config.restaurantId)
     .eq('channel', 'telegram')
     .eq('external_user_id', String(telegramUser.id))
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export async function listPendingOrders() {
+  const { data, error } = await supabase
+    .from('orders_v2')
+    .select('id,customer_id,status,delivery_type,delivery_address,payment_method,payment_status,subtotal,tax_amount,delivery_fee,total,currency,created_at')
+    .eq('restaurant_id', config.restaurantId)
+    .in('status', ['pending','confirmed','preparing','ready','out_for_delivery'])
+    .order('created_at', { ascending: true })
+    .limit(20);
+  if (error) throw error;
+  return data || [];
+}
+
+export async function updateOrderStatus(orderId, status) {
+  const { data, error } = await supabase
+    .from('orders_v2')
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq('restaurant_id', config.restaurantId)
+    .eq('id', orderId)
+    .select('id,customer_id,status,total,currency')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function getCustomerById(customerId) {
+  const { data, error } = await supabase
+    .from('customers_v2')
+    .select('*')
+    .eq('restaurant_id', config.restaurantId)
+    .eq('id', customerId)
     .maybeSingle();
   if (error) throw error;
   return data;
