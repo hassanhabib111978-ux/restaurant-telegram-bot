@@ -225,11 +225,20 @@ async function showCart(ctx) {
 }
 
 bot.start(async ctx => {
-  await upsertCustomer(ctx.from);
-  return ctx.reply(
-    `أهلًا بك في ${config.restaurantName} 👋\nاختر ما تريد من القائمة.`,
-    mainMenu()
-  );
+  console.log('START_RECEIVED', String(ctx.from?.id || 'unknown'));
+  try {
+    await upsertCustomer(ctx.from);
+    return await ctx.reply(
+      `أهلًا بك في ${config.restaurantName} 👋\nاختر ما تريد من القائمة.`,
+      mainMenu()
+    );
+  } catch (err) {
+    console.error('START_ERROR', err);
+    return ctx.reply(
+      `أهلًا بك في ${config.restaurantName} 👋\nحدث خطأ بسيط أثناء تجهيز حسابك، لكن يمكنك المتابعة من المنيو.`,
+      mainMenu()
+    ).catch(() => {});
+  }
 });
 
 
@@ -570,6 +579,7 @@ bot.catch((err, ctx) => {
 const port = Number(process.env.PORT || config.port || 10000);
 const server = http.createServer((req, res) => {
   if (config.webhookDomain && req.url?.split('?')[0] === config.webhookPath) {
+    console.log('WEBHOOK_REQUEST', req.method, req.url);
     const callback = bot.webhookCallback(config.webhookPath, {
       secretToken: config.webhookSecret || undefined
     });
