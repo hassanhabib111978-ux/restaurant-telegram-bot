@@ -378,7 +378,18 @@ bot.action('checkout:start', async ctx => {
 bot.action('checkout:delivery', async ctx => {
   ctx.session.checkout = { step: 'address', deliveryType: 'delivery' };
   await ctx.answerCbQuery();
-  return ctx.reply('أرسل عنوان التوصيل كتابةً، ويمكنك لاحقًا إضافة مشاركة الموقع.');
+  return ctx.reply('📍 أرسل عنوان التوصيل كتابةً:');
+});
+
+bot.action('checkout:location:skip', async ctx => {
+  if (!ctx.session.checkout || ctx.session.checkout.deliveryType !== 'delivery') return ctx.answerCbQuery();
+  ctx.session.checkout.latitude = null;
+  ctx.session.checkout.longitude = null;
+  ctx.session.checkout.step = 'phone';
+  await ctx.answerCbQuery('يمكن متابعة الطلب بدون مشاركة الموقع');
+  return ctx.reply('📱 أرسل رقم الهاتف للتواصل معك:', Markup.inlineKeyboard([
+    [Markup.button.callback('🛒 العودة للسلة', 'cart:show')]
+  ]));
 });
 
 bot.action('checkout:pickup', async ctx => {
@@ -408,14 +419,26 @@ bot.on('contact', async ctx => {
   }
 });
 
+bot.on('location', async ctx => {
+  const checkout = ctx.session.checkout;
+  if (!checkout || checkout.step !== 'location') return;
+  checkout.latitude = ctx.message.location.latitude;
+  checkout.longitude = ctx.message.location.longitude;
+  checkout.step = 'phone';
+  return ctx.reply('✅ تم استلام موقعك.\n📱 أرسل رقم الهاتف للتواصل معك:', Markup.inlineKeyboard([
+    [Markup.button.callback('🛒 العودة للسلة', 'cart:show')]
+  ]));
+});
+
 bot.on('text', async ctx => {
   const checkout = ctx.session.checkout;
   if (!checkout) return;
 
   if (checkout.step === 'address') {
     checkout.address = ctx.message.text;
-    checkout.step = 'phone';
-    return ctx.reply('📱 أرسل رقم الهاتف للتواصل معك:', Markup.inlineKeyboard([
+    checkout.step = 'location';
+    return ctx.reply('📍 شارك موقعك لتحديد مكان التوصيل بدقة، أو اختر التخطي:', Markup.inlineKeyboard([
+      [Markup.button.callback('تخطي الموقع', 'checkout:location:skip')],
       [Markup.button.callback('🛒 العودة للسلة', 'cart:show')]
     ]));
   }
