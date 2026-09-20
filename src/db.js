@@ -98,6 +98,18 @@ export async function listCustomerOrders(customerId) {
   return data || [];
 }
 
+export async function getCustomer(telegramUser) {
+  const { data, error } = await supabase
+    .from('customers_v2')
+    .select('*')
+    .eq('restaurant_id', config.restaurantId)
+    .eq('channel', 'telegram')
+    .eq('external_user_id', String(telegramUser.id))
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
 export async function createOrder({ customerId, items, deliveryType, address, latitude, longitude, deliveryZoneId, paymentMethod, subtotal, tax, deliveryFee, total }) {
   const { data: order, error } = await supabase.from('orders_v2').insert({
     restaurant_id: config.restaurantId,
