@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { Telegraf, Markup, session } from 'telegraf';
 import { config, validateConfig } from './config.js';
-import { getCategories, getProducts, getProduct, getProductOptions, getProductOption, upsertCustomer, getCustomer, listCustomerOrders, createOrder } from './db.js';
+import { getCategories, getProducts, getProduct, getProductOptions, getProductOption, getDeliveryZones, upsertCustomer, getCustomer, getCustomerById, listCustomerOrders, listPendingOrders, updateOrderStatus, createOrder } from './db.js';
 
 validateConfig();
 const bot = new Telegraf(config.botToken);
@@ -232,6 +232,50 @@ bot.start(async ctx => {
   );
 });
 
+
+function isAdmin(ctx) {
+  return config.adminIds.includes(String(ctx.from?.id));
+}
+function adminOrderKeyboard(orderId, status) {
+  const next = { pending: ['confirmed'], confirmed: ['preparing'], preparing: ['ready'], ready: ['out_for_delivery'], out_for_delivery: ['delivered'] }[status] || [];
+  return Markup.inlineKeyboard([
+    ...next.map(s => [Markup.button.callback('تحديث: ' + s, 'admin:status:' + orderId + ':' + s)]),
+    [Markup.button.callback('❌ إلغاء الطلب', 'admin:status:' + orderId + ':cancelled')]
+  ]);
+}
+bot.command('orders', async ctx => {
+  if (!isAdmin(ctx)) return;
+  const orders = await listPendingOrders();
+  if (!orders.length) return ctx.reply('لا توجد طلبات قيد المعالجة.');
+  for (const o of orders) {
+    const customer = o.customer_id ? await getCustomerById(o.customer_id) : null;
+    await ctx.reply(
+      '📦 <b>طلب #' + o.id + '</b>\\nالحالة: ' + o.status + '\\nالعميل: ' + (customer?.name || 'غير معروف') + '\\nالهاتف: ' + (customer?.phone || 'غير مسجل') + '\\nالنوع: ' + (o.delivery_type === 'delivery' ? 'توصيل' : 'استلام') + '\\nالإجمالي: ' + money(o.total),
+      { parse_mode: 'HTML', ...adminOrderKeyboard(o.id, o.status) }
+    );
+  }
+});
+bot.action(/^admin:status:(\d+):(.+)$/, async ctx => {
+  if (!isAdmin(ctx)) return ctx.answerCbQuery('غير مصرح');
+  const orderId = Number(ctx.match[1]);
+  const status = ctx.match[2];
+  const allowed = ['confirmed','preparing','ready','out_for_delivery','delivered','cancelled'];
+  if (!allowed.includes(status)) return ctx.answerCbQuery('حالة غير صالحة');
+  try {
+    const order = await updateOrderStatus(orderId, status);
+    const customer = order.customer_id ? await getCustomerById(order.customer_id) : null;
+    if (customer?.external_user_id) {
+      const labels = { confirmed:'تم تأكيد طلبك', preparing:'بدأ تحضير طلبك', ready:'طلبك جاهز', out_for_delivery:'طلبك خرج للتوصيل', delivered:'تم تسليم طلبك', cancelled:'تم إلغاء طلبك' };
+      await bot.telegram.sendMessage(customer.external_user_id, '📦 الطلب #' + order.id + ': ' + (labels[status] || status));
+    }
+    await ctx.answerCbQuery('تم تحديث حالة الطلب');
+    return ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+  } catch (err) {
+    console.error('ADMIN_STATUS_ERROR', err);
+    return ctx.answerCbQuery('تعذر تحديث الطلب');
+  }
+});
+
 bot.command('menu', showCategories);
 
 bot.action('menu:home', async ctx => {
@@ -381,6 +425,22 @@ bot.action('checkout:delivery', async ctx => {
   return ctx.reply('📍 أرسل عنوان التوصيل كتابةً:');
 });
 
+bot.action(/^zone:(.+)$/, async ctx => {
+  const checkout = ctx.session.checkout;
+  if (!checkout || checkout.deliveryType !== 'delivery') return ctx.answerCbQuery();
+  const zones = await getDeliveryZones();
+  const zone = zones.find(z => String(z.id) === String(ctx.match[1]));
+  if (!zone) return ctx.answerCbQuery('منطقة التوصيل غير متاحة');
+  checkout.deliveryZoneId = zone.id;
+  checkout.deliveryFee = Number(zone.fee || 0);
+  checkout.step = 'location';
+  await ctx.answerCbQuery();
+  return ctx.reply('📍 شارك موقعك لتحديد مكان التوصيل بدقة، أو اختر التخطي:', Markup.inlineKeyboard([
+    [Markup.button.callback('تخطي الموقع', 'checkout:location:skip')],
+    [Markup.button.callback('🛒 العودة للسلة', 'cart:show')]
+  ]));
+});
+
 bot.action('checkout:location:skip', async ctx => {
   if (!ctx.session.checkout || ctx.session.checkout.deliveryType !== 'delivery') return ctx.answerCbQuery();
   ctx.session.checkout.latitude = null;
@@ -436,6 +496,14 @@ bot.on('text', async ctx => {
 
   if (checkout.step === 'address') {
     checkout.address = ctx.message.text;
+    const zones = await getDeliveryZones();
+    if (zones.length) {
+      checkout.step = 'zone';
+      return ctx.reply('📍 اختر منطقة التوصيل:', Markup.inlineKeyboard([
+        ...zones.map(z => [Markup.button.callback(z.name + ' — ' + money(z.fee), 'zone:' + z.id)]),
+        [Markup.button.callback('🛒 العودة للسلة', 'cart:show')]
+      ]));
+    }
     checkout.step = 'location';
     return ctx.reply('📍 شارك موقعك لتحديد مكان التوصيل بدقة، أو اختر التخطي:', Markup.inlineKeyboard([
       [Markup.button.callback('تخطي الموقع', 'checkout:location:skip')],
@@ -467,7 +535,7 @@ async function finishCheckout(ctx, paymentMethod) {
     longitude: ctx.session.checkout?.longitude
   });
   const subtotal = cart.reduce((sum, item) => sum + (Number(item.product.price) + (item.options || []).reduce((s, o) => s + Number(o.price_delta || 0), 0)) * item.quantity, 0);
-  const deliveryFee = ctx.session.checkout?.deliveryType === 'delivery' ? config.defaultDeliveryFee : 0;
+  const deliveryFee = ctx.session.checkout?.deliveryType === 'delivery' ? Number(ctx.session.checkout?.deliveryFee ?? config.defaultDeliveryFee) : 0;
 
   let order;
   try {
