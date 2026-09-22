@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { Telegraf, Markup, session } from 'telegraf';
 import { config, validateConfig } from './config.js';
-import { getCategories, getProducts, getProduct, getProductOptions, getProductOption, getDeliveryZones, upsertCustomer, getCustomer, getCustomerById, listCustomerOrders, listPendingOrders, updateOrderStatus, createOrder } from './db.js';
+import { getCategories, getProducts, getProduct, getProductOptions, getProductOption, getDeliveryZones, upsertCustomer, getCustomer, getCustomerById, listCustomerOrders, getOrderWithItems, listPendingOrders, updateOrderStatus, createOrder } from './db.js';
 
 validateConfig();
 const bot = new Telegraf(config.botToken);
@@ -259,7 +259,7 @@ bot.command('orders', async ctx => {
   for (const o of orders) {
     const customer = o.customer_id ? await getCustomerById(o.customer_id) : null;
     await ctx.reply(
-      '📦 <b>طلب #' + o.id + '</b>\\nالحالة: ' + o.status + '\\nالعميل: ' + (customer?.name || 'غير معروف') + '\\nالهاتف: ' + (customer?.phone || 'غير مسجل') + '\\nالنوع: ' + (o.delivery_type === 'delivery' ? 'توصيل' : 'استلام') + '\\nالإجمالي: ' + money(o.total),
+      '📦 <b>طلب #' + o.id + '</b>\nالحالة: ' + o.status + '\\nالعميل: ' + (customer?.name || 'غير معروف') + '\nالهاتف: ' + (customer?.phone || 'غير مسجل') + '\nالنوع: ' + (o.delivery_type === 'delivery' ? 'توصيل' : 'استلام') + '\nالإجمالي: ' + money(o.total),
       { parse_mode: 'HTML', ...adminOrderKeyboard(o.id, o.status) }
     );
   }
@@ -322,10 +322,44 @@ bot.action('orders:show', async ctx => {
     const text = orders.map(o =>
       `#${o.id} — ${statusMap[o.status] || o.status}\n${money(o.total)} — ${o.delivery_type === 'delivery' ? 'توصيل' : 'استلام'}\nالدفع: ${o.payment_method === 'cash' ? 'عند الاستلام' : 'إلكتروني'}`
     ).join('\n\n');
-    return ctx.reply(`📦 <b>طلباتي</b>\n\n${text}`, { parse_mode: 'HTML', ...backHome() });
+    const rows = orders.map(o => [
+      Markup.button.callback(`🔄 إعادة طلب #${o.id}`, `reorder:${o.id}`)
+    ]);
+    rows.push([Markup.button.callback('  🏠 الرئيسية  ', 'menu:home')]);
+    return ctx.reply(`📦 <b>طلباتي</b>\n\n${text}`, { parse_mode: 'HTML', ...Markup.inlineKeyboard(rows) });
   } catch (err) {
     console.error('ORDERS_ERROR', err);
     return ctx.reply('تعذر تحميل الطلبات حاليًا. حاول مرة أخرى.', backHome());
+  }
+});
+
+bot.action(/^reorder:(\\d+)$/, async ctx => {
+  await ctx.answerCbQuery();
+  try {
+    const order = await getOrderWithItems(Number(ctx.match[1]));
+    if (!order) return ctx.reply('تعذر العثور على الطلب.', backHome());
+
+    const cart = [];
+    for (const item of order.items || []) {
+      const product = await getProduct(item.product_id);
+      if (!product) continue;
+
+      const options = await getProductOptions(product.id);
+      const savedOptions = Array.isArray(item.options_json) ? item.options_json : [];
+      const selectedIds = savedOptions.map(o => o?.id).filter(Boolean);
+      const selectedOptions = options.filter(o => selectedIds.includes(o.id));
+      const unitPrice = productUnitPrice(product, options, selectedOptions.map(o => o.id));
+      const quantity = Math.max(1, Number(item.quantity || 1));
+
+      cart.push({ product, quantity, options: selectedOptions, lineTotal: unitPrice * quantity });
+    }
+
+    if (!cart.length) return ctx.reply('لا يمكن إعادة هذا الطلب لأن منتجاته لم تعد متاحة.', backHome());
+    ctx.session.cart = cart;
+    return showCart(ctx);
+  } catch (err) {
+    console.error('REORDER_ERROR', err);
+    return ctx.reply('تعذر إعادة الطلب حاليًا. حاول مرة أخرى.', backHome());
   }
 });
 
@@ -558,6 +592,7 @@ async function finishCheckout(ctx, paymentMethod) {
     paymentMethod,
     subtotal,
     tax: 0,
+    deliveryZoneId: ctx.session.checkout?.deliveryZoneId,
     deliveryFee,
     total: subtotal + deliveryFee
   });
