@@ -109,6 +109,26 @@ export async function listCustomerOrders(customerId) {
   return data || [];
 }
 
+export async function getOrderWithItems(orderId) {
+  const { data: order, error } = await supabase
+    .from('orders_v2')
+    .select('id,status,delivery_type,payment_method,payment_status,subtotal,tax,delivery_fee,total,currency,created_at')
+    .eq('restaurant_id', config.restaurantId)
+    .eq('id', orderId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!order) return null;
+
+  const { data: items, error: itemError } = await supabase
+    .from('order_items_v2')
+    .select('product_id,product_name,unit_price,quantity,options_json,line_total')
+    .eq('order_id', orderId)
+    .order('id');
+  if (itemError) throw itemError;
+
+  return { ...order, items: items || [] };
+}
+
 export async function getCustomer(telegramUser) {
   const { data, error } = await supabase
     .from('customers_v2')
