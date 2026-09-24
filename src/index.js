@@ -333,7 +333,7 @@ bot.action('orders:show', async ctx => {
   }
 });
 
-bot.action(/^reorder:(\\d+)$/, async ctx => {
+bot.action(/^reorder:(\d+)$/, async ctx => {
   await ctx.answerCbQuery();
   try {
     const order = await getOrderWithItems(Number(ctx.match[1]));
@@ -619,6 +619,10 @@ const server = http.createServer((req, res) => {
       secretToken: config.webhookSecret || undefined
     });
     return callback(req, res);
+  }
+  if (req.url?.split('?')[0] === '/health') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({ ok: true, service: 'restaurant-bot' }));
   }
   res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
   res.end('Restaurant bot is running.');
