@@ -198,9 +198,21 @@ function cartText(cart) {
 
 async function showCart(ctx) {
   const cart = ctx.session.cart || [];
+  const rows = [];
+
+  cart.forEach((item, index) => {
+    rows.push([
+      Markup.button.callback('➖', `cart:qty:${index}:-1`),
+      Markup.button.callback(`× ${item.quantity}`, `cart:qty:none:${index}`),
+      Markup.button.callback('➕', `cart:qty:${index}:1`),
+      Markup.button.callback('🗑️', `cart:remove:${index}`)
+    ]);
+  });
+
   const keyboard = !cart.length
     ? mainMenu()
     : Markup.inlineKeyboard([
+        ...rows,
         [
           Markup.button.callback('  🧹 تفريغ السلة  ', 'cart:clear'),
           Markup.button.callback('  ✅ متابعة الطلب  ', 'checkout:start')
@@ -442,6 +454,30 @@ bot.action(/^add:(.+)$/, async ctx => {
   ]));
 });
 
+bot.action(/^cart:qty:(\\d+):(-?1)$/, async ctx => {
+  const index = Number(ctx.match[1]);
+  const delta = Number(ctx.match[2]);
+  const cart = ctx.session.cart || [];
+  if (!cart[index]) return ctx.answerCbQuery('العنصر غير موجود');
+  cart[index].quantity = Math.max(1, Math.min(99, Number(cart[index].quantity || 1) + delta));
+  cart[index].lineTotal = (Number(cart[index].product.price) + (cart[index].options || []).reduce((sum, option) => sum + Number(option.price_delta || 0), 0)) * cart[index].quantity;
+  await ctx.answerCbQuery(`الكمية: ${cart[index].quantity}`);
+  return showCart(ctx);
+});
+
+bot.action(/^cart:qty:none:(\\d+)$/, async ctx => {
+  return ctx.answerCbQuery('استخدم ➕ و ➖ لتعديل الكمية');
+});
+
+bot.action(/^cart:remove:(\\d+)$/, async ctx => {
+  const index = Number(ctx.match[1]);
+  const cart = ctx.session.cart || [];
+  if (!cart[index]) return ctx.answerCbQuery('العنصر غير موجود');
+  const removed = cart.splice(index, 1)[0];
+  await ctx.answerCbQuery(`تم حذف ${removed.product.name}`);
+  return showCart(ctx);
+});
+
 bot.action('cart:clear', async ctx => {
   ctx.session.cart = [];
   await ctx.answerCbQuery('تم تفريغ السلة');
@@ -503,11 +539,51 @@ bot.action('checkout:pickup', async ctx => {
   ]));
 });
 
-bot.action('pay:cash', async ctx => finishCheckout(ctx, 'cash'));
+async function showCheckoutConfirmation(ctx, paymentMethod) {
+  const checkout = ctx.session.checkout;
+  const cart = ctx.session.cart || [];
+  if (!checkout || !cart.length) return ctx.reply('السلة فارغة.', mainMenu());
+
+  const subtotal = cart.reduce((sum, item) => sum + (Number(item.product.price) + (item.options || []).reduce((s, o) => s + Number(o.price_delta || 0), 0)) * item.quantity, 0);
+  const deliveryFee = checkout.deliveryType === 'delivery' ? Number(checkout.deliveryFee ?? config.defaultDeliveryFee) : 0;
+  const total = subtotal + deliveryFee;
+  const deliveryText = checkout.deliveryType === 'delivery'
+    ? `🚚 توصيل\\nالعنوان: ${checkout.address || 'غير محدد'}\\nرسوم التوصيل: ${money(deliveryFee)}`
+    : '🏪 استلام من المطعم';
+
+  checkout.step = 'confirm';
+  checkout.paymentMethod = paymentMethod;
+
+  return ctx.reply(
+    `🧾 <b>تأكيد الطلب</b>\\n\\n${cartText(cart)}\\n\\n${deliveryText}\\nطريقة الدفع: ${paymentMethod === 'cash' ? 'دفع عند الاستلام' : 'دفع إلكتروني'}\\n\\n<b>الإجمالي النهائي: ${money(total)}</b>`,
+    { parse_mode: 'HTML', ...Markup.inlineKeyboard([
+      [Markup.button.callback('✅ تأكيد وإرسال الطلب', 'checkout:confirm')],
+      [Markup.button.callback('✏️ تعديل السلة', 'cart:show')],
+      [Markup.button.callback('❌ إلغاء', 'checkout:cancel')]
+    ]) }
+  );
+}
+
+bot.action('pay:cash', async ctx => {
+  await ctx.answerCbQuery();
+  return showCheckoutConfirmation(ctx, 'cash');
+});
 
 bot.action('pay:online', async ctx => {
   await ctx.answerCbQuery();
-  return ctx.reply('الدفع الإلكتروني جاهز للربط بمزود الدفع، لكن لن نفعل أي بوابة قبل تحديد المزود وواجهته رسميًا.');
+  return ctx.reply('الدفع الإلكتروني جاهز للربط بمزود الدفع. بعد اختيار المزود رسميًا سنربطه دون تغيير مسار الطلب.', backHome());
+});
+
+bot.action('checkout:confirm', async ctx => {
+  const paymentMethod = ctx.session.checkout?.paymentMethod;
+  if (!paymentMethod) return ctx.answerCbQuery('لم يتم اختيار طريقة دفع');
+  return finishCheckout(ctx, paymentMethod);
+});
+
+bot.action('checkout:cancel', async ctx => {
+  await ctx.answerCbQuery('تم إلغاء إتمام الطلب');
+  ctx.session.checkout = null;
+  return showCart(ctx);
 });
 
 bot.on('contact', async ctx => {
